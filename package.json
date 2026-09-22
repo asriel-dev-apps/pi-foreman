@@ -1,0 +1,20 @@
+{
+  "name": "pi-foreman",
+  "version": "0.0.1",
+  "private": true,
+  "type": "module",
+  "description": "着手前にタスクを見立てて、進め方の助言を pi に注入する",
+  "scripts": {
+    "check": "node scripts/check.ts",
+    "fixtures": "node scripts/fixtures-check.ts",
+    "backtest": "node scripts/backtest.ts"
+  },
+  "engines": {
+    "node": ">=23.6"
+  },
+  "devDependencies": {
+    "@earendil-works/pi-coding-agent": "^0.87.0",
+    "@types/node": "^26.6.2",
+    "typescript": "^7.0.2"
+  }
+}
