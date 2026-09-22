@@ -7,6 +7,9 @@ import { homedir } from "node:os";
 import { ask, advise } from "../src/foreman.ts";
 
 const ROOT = join(homedir(), ".claude", "projects");
+
+// 「進捗レポートを書いた」とみなすパス。置き場所は人によるので、自分の慣習に合わせる。
+const REPORT_PATH = /\/reports\/[^/]+\.html$/;
 const LIMIT = Number(process.argv[2] ?? 40);
 
 // ログには API キーが平文で残り得る。長い英数字列は落としてから表示する。
@@ -71,7 +74,7 @@ function readSession(file: string): Session | null {
         if (b?.type !== "tool_use") continue;
         if (b.name === "Agent") agent = true;
         if (b.name === "Skill" && b.input?.skill) skills.push(String(b.input.skill));
-        if (b.name === "Write" && /project-docs\/.*\/reports\/.*\.html$/.test(String(b.input?.file_path ?? ""))) {
+        if (b.name === "Write" && REPORT_PATH.test(String(b.input?.file_path ?? ""))) {
           report = true;
         }
       }

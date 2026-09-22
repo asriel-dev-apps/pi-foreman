@@ -92,12 +92,16 @@ export async function ask(state: string, opts: { apiKey?: string; timeoutMs?: nu
   }
 }
 
-const SKILL_BY_KIND: Record<string, string> = {
-  docs: "html-doc",
-  security: "sec-scan",
-  ui: "screen-proof",
-  infra: "deploy-gating",
-  research: "researcher に委譲して結論だけ受け取る",
+/**
+ * 仕事の種類ごとの一言。ここは各自の道具立てに置き換えて使うところで、
+ * 手元の skill 名やコマンド名を入れると助言が具体的になる。
+ */
+const ADVICE_BY_KIND: Record<string, string> = {
+  docs: "読み手が誰かを先に決めてから書く。",
+  security: "公開・送信する値に、出してはいけないものが混ざらないか確かめる。",
+  ui: "実装したら実画面を見る。テストもレビューも画面は見ていない。",
+  infra: "壊れたときに戻す手順を先に用意する。",
+  research: "調べる量が多いなら、別のエージェントに任せて結論だけ受け取る。",
 };
 
 /** 判定 → 助言の文面。純粋関数なのでネットワークなしで検査できる。 */
@@ -124,8 +128,8 @@ export function advise(v: Verdict): string[] {
   if (v.size >= 2.0) {
     lines.push("完了時に HTML 進捗レポートを残す規模。");
   }
-  const skill = v.kindConfidence >= 0.5 ? SKILL_BY_KIND[v.kind] : undefined;
-  if (skill) lines.push(`${v.kind} の仕事。${skill} が使えるか見ること。`);
+  const kindAdvice = v.kindConfidence >= 0.5 ? ADVICE_BY_KIND[v.kind] : undefined;
+  if (kindAdvice) lines.push(`${v.kind} の仕事。${kindAdvice}`);
 
   return lines;
 }

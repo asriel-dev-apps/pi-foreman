@@ -32,9 +32,9 @@ assert.match(big, /rv/);
 assert.match(big, /レポート/);
 assert.match(big, /委譲/);
 
-// kind の確信が低いときは skill を勧めない
-assert.doesNotMatch(joined({ kind: "security", kindConfidence: 0.3 }), /sec-scan/);
-assert.match(joined({ kind: "security", kindConfidence: 0.9 }), /sec-scan/);
+// kind の確信が低いときは種類ごとの助言を出さない
+assert.doesNotMatch(joined({ kind: "security", kindConfidence: 0.3 }), /security の仕事/);
+assert.match(joined({ kind: "security", kindConfidence: 0.9 }), /security の仕事/);
 
 assert.equal(suggestModel(v({ size: 0.0, risky: 0.04 })), "haiku");
 assert.equal(suggestModel(v({ size: 1.3, risky: 0.87 })), "opus");
