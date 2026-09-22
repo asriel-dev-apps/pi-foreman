@@ -3,8 +3,8 @@
 [pi](https://github.com/earendil-works/pi) に 2 つの層を足す。判定は
 [TypeSafe の jev](https://docs.typesafe.ai)。散文ではなく確率が返るので、分岐できる。
 
-- **foreman** — 着手前に 1 回、タスクを見立てて進め方の助言を注入する（[ADR 0001](dev-docs/adr/0001-jev-routing-layer.md)）
-- **gate** — ツール実行の直前に、危ない操作を知らせる（[ADR 0002](dev-docs/adr/0002-gate.md)）
+- **foreman** — 着手前に 1 回、タスクを見立てて進め方の助言を注入する
+- **gate** — ツール実行の直前に、危ない操作を知らせる
 
 ```bash
 pi -e .
