@@ -8,6 +8,7 @@
 // したがって: 事実は手元で確定させ、jev には判断だけを問う。
 
 import { execFileSync } from "node:child_process";
+import { existsSync } from "node:fs";
 import { isAbsolute, resolve } from "node:path";
 
 const ENDPOINT = "https://api.typesafe.ai/v1/systemone";
@@ -61,6 +62,11 @@ export type Facts = {
   anyDirty: boolean;
   /** 作業ディレクトリの外を触る */
   outsideRepo: boolean;
+  /**
+   * すでに存在するが git が追跡していないファイルを上書きする。git にも無視対象にも
+   * 載っていないので、消えたら本当に戻らない。追跡済みファイルの上書きとは事情が違う。
+   */
+  overwritesUntracked: boolean;
 };
 
 // 読むだけのコマンド。ここにあるものは API に送らない。送らなければ漏れない。
@@ -105,6 +111,7 @@ export function gatherFacts(cwd: string, toolName: string, input: Record<string,
     allIgnored: false,
     anyDirty: false,
     outsideRepo: paths.some((p) => (isAbsolute(p) ? !resolve(p).startsWith(resolve(cwd)) : p.startsWith(".."))),
+    overwritesUntracked: false,
   };
 
   if (!paths.length) return facts;
@@ -121,6 +128,18 @@ export function gatherFacts(cwd: string, toolName: string, input: Record<string,
 
     const dirty = git(cwd, ["status", "--porcelain", "--", ...paths]).split("\n").filter(Boolean);
     facts.anyDirty = dirty.length > 0;
+
+    // すでにあって、追跡もされておらず、無視対象でもないファイル。git は何も知らないので
+    // 上書きすれば元の中身は消える。新規作成 (存在しない) とは区別する。
+    let tracked: string[] = [];
+    try {
+      tracked = git(cwd, ["ls-files", "--", ...paths]).split("\n").filter(Boolean);
+    } catch {
+      tracked = [];
+    }
+    facts.overwritesUntracked = paths.some(
+      (p) => existsSync(resolve(cwd, p)) && !tracked.includes(p) && !ignored.includes(p),
+    );
   } catch {
     // git リポジトリでない。事実は増えないので jev の判断がそのまま通る
   }
@@ -171,6 +190,9 @@ export function decide(scores: Record<string, number>, facts: Facts): GateVerdic
   if (facts.outsideRepo && scores.destructive >= 0.5) {
     reasons.push("作業ディレクトリの外を触る");
   }
+  if (facts.overwritesUntracked && scores.destructive >= 0.5) {
+    reasons.push("git が知らないファイルを上書きする (元の中身は戻らない)");
+  }
 
   return { flagged: reasons.length > 0, reasons, scores, skipped: false };
 }
@@ -200,6 +222,7 @@ export async function judge(
       targets_have_uncommitted_changes: facts.anyDirty,
       rewrites_git_history: facts.rewritesHistory,
       outside_working_directory: facts.outsideRepo,
+      overwrites_file_git_does_not_track: facts.overwritesUntracked,
     },
   };
 

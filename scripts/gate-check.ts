@@ -23,6 +23,7 @@ function fixtureRepo(): string {
   mkdirSync(join(dir, "build"));
   writeFileSync(join(dir, "build/out.js"), "console.log(1)\n");
   writeFileSync(join(dir, "notes.md"), "# notes\nedited\n"); // 未コミットにする
+  writeFileSync(join(dir, "scratch.txt"), "追跡されていないメモ\n"); // 未追跡・無視対象でもない
   return dir;
 }
 
@@ -44,6 +45,13 @@ assert.equal(facts("git push --force origin main").rewritesHistory, true);
 assert.equal(facts("git push origin main").rewritesHistory, false);
 assert.equal(facts("rm -rf ../other").outsideRepo, true);
 
+// git が知らないファイルの上書きは、追跡済みの上書きとも新規作成とも事情が違う
+const wrote = (path: string) => gatherFacts(repo, "write", { path });
+assert.equal(wrote("scratch.txt").overwritesUntracked, true, "存在する未追跡ファイル");
+assert.equal(wrote("src/app.ts").overwritesUntracked, false, "追跡済みなら git から戻せる");
+assert.equal(wrote("build/out.js").overwritesUntracked, false, "無視対象は元から git の外");
+assert.equal(wrote("brand-new.txt").overwritesUntracked, false, "存在しないなら新規作成");
+
 // --- 評決 ---------------------------------------------------------------
 const hot = { destructive: 0.97, exfiltration: 0.05, beyond_scope: 0.3, impact: 1.0 };
 
@@ -59,6 +67,12 @@ assert.match(dirty.reasons.join(), /未コミット/);
 assert.match(decide({ destructive: 0.1, exfiltration: 0, beyond_scope: 0, impact: 0 }, facts("git push --force origin main")).reasons.join(), /履歴/);
 // 無視対象でも履歴を書き換えるなら見逃さない
 assert.equal(decide(hot, facts("rm -rf build && git push --force")).flagged, true);
+
+assert.match(
+  decide({ ...hot, destructive: 0.7 }, gatherFacts(repo, "write", { path: "scratch.txt" })).reasons.join(),
+  /git が知らないファイル/,
+);
+assert.equal(decide({ ...hot, destructive: 0.7 }, gatherFacts(repo, "write", { path: "src/app.ts" })).flagged, false);
 
 // --- ファイル本文を送らない ---------------------------------------------
 const redacted = redactArguments({ path: "src/app.ts", content: "秘密のトークン abc123\n2行目\n" }, 400);
