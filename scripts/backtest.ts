@@ -1,7 +1,7 @@
 // node scripts/backtest.ts [件数] — 過去の Claude Code セッションを正解ラベルにして
 // ルール表の判定と突き合わせる。pi にはこの規模のログがまだないので claude 側を使う。
 // 検証しているのは「質問文 × 閾値」であって、pi 側の文面の妥当性ではない (ADR 0001)。
-import { readFileSync, readdirSync, statSync } from "node:fs";
+import { existsSync, readFileSync, readdirSync, statSync } from "node:fs";
 import { join } from "node:path";
 import { homedir } from "node:os";
 import { ask, advise } from "../src/foreman.ts";
@@ -24,12 +24,15 @@ const humanPart = (c: string) =>
 
 // 着手前ルーティングの対象外。仕事が書かれていない冒頭は、判定材料がないのだから
 // 判定してはいけない。標本に残すと「見逃し」として数えられて数字が濁る。
+// 部分一致にすると本物の依頼を巻き込む。「<Button> の表示崩れを直して」は `^<` に、
+// 「/src/auth.ts のバグを直して」は `^/` に、「続きです。今回は別の関数を直して」は
+// 部分一致の「続きです」に食われる。だからメッセージ全体の形で判定する。
 const OUT_OF_SCOPE = [
-  /^</, //                            task-notification などで起こされただけ
-  /^Review this change for security/, // /security-review の定型文
-  /^\//, //                           スラッシュコマンド (/resume など)
-  /続き(です|をやって)/, //            前回の作業の継続
-  /^再開/,
+  /^<(task-notification|system-reminder|local-command)/, // 起こされただけ・コマンドの残骸
+  /^Review this change for security vulnerabilities\.?$/m, // /security-review の定型文
+  /^\/[a-z-]+(\s|$)/i, //              スラッシュコマンドそのもの (/resume など)
+  /^[^。\n]{0,20}続き(です|をやって)[^。\n]{0,40}$/, // 「…の続きです」だけで終わる依頼
+  /^再開(して)?[。\s]*$/,
   /^say OK$/i,
   /^Reply with only your exact model ID/,
 ];
@@ -77,6 +80,11 @@ function readSession(file: string): Session | null {
   return prompt ? { file, prompt, agent, skills, report } : null;
 }
 
+if (!existsSync(ROOT)) {
+  console.error(`${ROOT} がない。Claude Code のセッションログが要る。`);
+  process.exit(1);
+}
+
 const files = readdirSync(ROOT, { withFileTypes: true })
   .filter((e) => e.isDirectory())
   .flatMap((e) =>
@@ -122,10 +130,14 @@ for (const file of files) {
 }
 
 console.log(`\n${scored} セッション (対象外として除外: ${outOfScope})`);
-for (const k of ["delegate", "report"] as const) {
-  const [tp, fp, fn, tn] = counts[k];
-  console.log(
-    `${k.padEnd(9)} 一致 ${(((tp + tn) / scored) * 100).toFixed(0)}%  ` +
-      `的中 ${tp}  空振り ${fp}  見逃し ${fn}  正しく静か ${tn}`,
-  );
+if (!scored) {
+  console.log("突き合わせる対象がなかった");
+} else {
+  // 割合は出さない。ラベルは「セッション中に一度でも起きたか」であって、冒頭プロンプトが
+  // 予測すべき対象ではないため、率として読める数字を出すこと自体が誤解を招く。
+  for (const k of ["delegate", "report"] as const) {
+    const [tp, fp, fn, tn] = counts[k];
+    console.log(`${k.padEnd(9)} 的中 ${tp}  空振り ${fp}  見逃し ${fn}  正しく静か ${tn}`);
+  }
+  console.log("この数は率ではない。!! 行を1件ずつ読んで、質問文の欠陥を探すための道具。");
 }

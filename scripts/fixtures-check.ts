@@ -6,7 +6,8 @@ import { ask, type Verdict } from "../src/foreman.ts";
 type Fixture = {
   state: string;
   note?: string;
-  expect: Record<string, [string, number]>;
+  /** ["<", 0.5] / [">", 0.6] は数値、["eq", "ui"] は kind の分類 */
+  expect: Record<string, [string, number | string]>;
 };
 
 const fixtures: Fixture[] = JSON.parse(
@@ -23,9 +24,14 @@ for (const f of fixtures) {
   }
   const bad: string[] = [];
   for (const [key, [op, bound]] of Object.entries(f.expect)) {
-    const got = v[key as keyof Verdict] as number;
-    const ok = op === "<" ? got < bound : got > bound;
-    if (!ok) bad.push(`${key}=${got.toFixed(2)} (expected ${op}${bound})`);
+    const got = v[key as keyof Verdict];
+    if (op === "eq") {
+      if (got !== bound) bad.push(`${key}=${got} (expected ${bound})`);
+      continue;
+    }
+    const n = got as number;
+    const ok = op === "<" ? n < (bound as number) : n > (bound as number);
+    if (!ok) bad.push(`${key}=${n.toFixed(2)} (expected ${op}${bound})`);
   }
   const shown = `size=${v.size.toFixed(2)} risky=${v.risky.toFixed(2)} visual=${v.visual.toFixed(2)} delegable=${v.delegable.toFixed(2)} kind=${v.kind}`;
   if (bad.length) {

@@ -22,8 +22,11 @@ export const QUESTIONS = {
   // 「README の typo を直して」に 0.84 が出た実測を受けて、走らせて初めて見えるものに限定した。
   visual: {
     type: "noul",
+    // 第1案は「data files は UI ではない」と書いていた。すると「ロケール JSON を変えて
+    // 画面の文言を直して」が 0.50 に沈む。編集するファイルの種類ではなく、終わったあとに
+    // 人が画面で見るものが変わるかを問うのが正しい。
     instructions:
-      "Does this task change a graphical or terminal user interface that has to be run to be seen? Editing documentation, README files, comments, or data files is not a user interface.",
+      "Will a person see a different screen when the program runs after this task? Say yes only if the layout, wording, colours, or components of a graphical or terminal interface change. Say no for work on data, storage, server behaviour, or documentation that leaves the displayed screens as they are.",
   },
   delegable: {
     type: "noul",
@@ -70,15 +73,20 @@ export async function ask(state: string, opts: { apiKey?: string; timeoutMs?: nu
     });
     if (!res.ok) return null;
     const a = (await res.json())?.answers;
-    if (!a?.size || !a?.kind) return null;
-    return {
-      size: a.size.score,
-      risky: a.risky.noul,
-      visual: a.visual.noul,
-      delegable: a.delegable.noul,
-      kind: a.kind.choice,
-      kindConfidence: a.kind.confidence ?? 0,
-    };
+    // HTTP 200 でも欠けたり型が違ったりし得る。組み立てる前に全部確かめる。
+    // ここで通してしまうと advise() の toFixed が before_agent_start の中で例外になり、
+    // fail open のはずの層がターンを落とす。
+    const num = (v: unknown, max: number) =>
+      typeof v === "number" && Number.isFinite(v) && v >= 0 && v <= max ? v : undefined;
+    const size = num(a?.size?.score, 3);
+    const risky = num(a?.risky?.noul, 1);
+    const visual = num(a?.visual?.noul, 1);
+    const delegable = num(a?.delegable?.noul, 1);
+    const kind = typeof a?.kind?.choice === "string" ? a.kind.choice : undefined;
+    if (size === undefined || risky === undefined || visual === undefined || delegable === undefined || !kind) {
+      return null;
+    }
+    return { size, risky, visual, delegable, kind, kindConfidence: num(a.kind.confidence, 1) ?? 0 };
   } catch {
     return null;
   }
