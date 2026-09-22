@@ -1,7 +1,9 @@
 // 実行前の安全弁の配線。判断は src/gate.ts にある。
 // 既定は shadow (知らせるだけで止めない)。enforce にすると実行前に確認を出す。
-import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
-import { judge } from "../src/gate.ts";
+import { appendFileSync } from "node:fs";
+import { join } from "node:path";
+import { getAgentDir, type ExtensionAPI } from "@earendil-works/pi-coding-agent";
+import { judge, type GateVerdict } from "../src/gate.ts";
 
 const JUDGED_TOOLS = ["bash", "write", "edit"];
 const CACHE_MS = 120_000;
@@ -11,7 +13,7 @@ export default function register(pi: ExtensionAPI): void {
   let enabled = true;
   let userRequest: string | undefined;
   let reportedErrorAt = 0;
-  const cache = new Map<string, { at: number; flagged: boolean; reasons: string[] }>();
+  const cache = new Map<string, { at: number } & GateVerdict>();
 
   pi.on("before_agent_start", async (event) => {
     userRequest = event.prompt?.trim();
@@ -41,10 +43,22 @@ export default function register(pi: ExtensionAPI): void {
       }
       return;
     }
-    if (!fresh) cache.set(key, { at: Date.now(), flagged: verdict.flagged, reasons: verdict.reasons });
+    if (!fresh) cache.set(key, { at: Date.now(), ...verdict });
     if (!verdict.flagged) return;
 
     const reason = verdict.reasons.join(" / ");
+
+    // shadow の通知は headless では画面に出ない。出ないものは検証できないので、
+    // 引っかかった判定は必ずファイルにも残す。
+    try {
+      appendFileSync(
+        join(getAgentDir(), "foreman-gate.log"),
+        `${JSON.stringify({ at: new Date().toISOString(), mode, tool: event.toolName, reason, scores: verdict.scores })}\n`,
+      );
+    } catch {
+      // 書けなくても判定は続ける
+    }
+
     if (mode === "shadow") {
       ctx.ui.notify(`gate: ${reason}`, "warning");
       ctx.ui.setStatus("gate", `gate: ${reason}`);
