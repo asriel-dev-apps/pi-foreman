@@ -14,9 +14,12 @@
 Node 23.6 以降と [TypeSafe の API キー](https://console.typesafe.ai/keys)が要る。
 
 ```bash
-export TYPESAFE_API_KEY='...'
+security add-generic-password -a "$USER" -s typesafe-api-key -w   # macOS: キーチェーンに保存 (値は対話で入力)
 pi -e /path/to/pi-foreman
 ```
+
+キーは環境変数 `TYPESAFE_API_KEY` からも読む。macOS ではキーチェーンを勧める。環境変数に置くと、
+エージェントが走らせる全コマンドにキーが渡る。
 
 - キーがなければ何もしない。エラーも出ないし pi はそのまま動く
 - 常時使うなら `~/.pi/agent/extensions/` に 1 行のファイルを置く
@@ -61,7 +64,7 @@ jev に聞くのは規模・取り返しのつかなさ・画面を変えるか�
 - 既定では依頼文の文字列は出ない。出るのは `src/state.ts` に書いた語彙の名前だけ
 - 差分・パス・ファイルの中身は、どのモードでも送らない。rv や HTML の入口での判断は手元だけで行う
 - ログ（`~/.local/state/foreman/log.jsonl`）には判定の数値だけを残す
-- API キーは環境変数からのみ読む
+- API キーは環境変数か macOS のキーチェーンから読む。追跡ファイルには書かない
 
 ## 質問文を変えるとき
 
@@ -69,8 +72,8 @@ jev に聞くのは規模・取り返しのつかなさ・画面を変えるか�
 
 ```bash
 npm run check                          # ルール表（ネットワーク不要）
-TYPESAFE_API_KEY=... npm run fixtures  # 質問文を jev に実際に問う
-TYPESAFE_API_KEY=... npm run fixtures -- --mode facts --holdout  # 既定の送り方で、語彙を作るときに見ていない例
+npm run fixtures  # 質問文を jev に実際に問う
+npm run fixtures -- --mode facts --holdout  # 既定の送り方で、語彙を作るときに見ていない例
 ```
 
 `tests/fixtures.json` には通ってほしい例と引っかかってほしくない例の両方が入っている。

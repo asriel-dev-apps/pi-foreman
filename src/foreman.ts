@@ -1,3 +1,5 @@
+import { execFileSync } from "node:child_process";
+
 // 質問文・閾値・ルール表。ここがこのプロジェクトの成果物本体で、拡張は配線にすぎない。
 // pi に依存しないこと: バックテストがこのモジュールを直接読む (ADR 0001 決定 4)。
 
@@ -68,9 +70,27 @@ export type Verdict = {
   kindConfidence: number;
 };
 
+/**
+ * API キー。環境変数が無ければ macOS のキーチェーン (サービス名 typesafe-api-key) から読む。
+ * 環境変数に置くとエージェントが走らせる全コマンドに渡るので、キーチェーンを勧める。
+ */
+export function readApiKey(): string | undefined {
+  if (process.env.TYPESAFE_API_KEY) return process.env.TYPESAFE_API_KEY;
+  if (process.platform !== "darwin") return undefined;
+  try {
+    return execFileSync("security", ["find-generic-password", "-s", "typesafe-api-key", "-w"], {
+      encoding: "utf8",
+      timeout: 1000,
+      stdio: ["ignore", "pipe", "ignore"],
+    }).trim() || undefined;
+  } catch {
+    return undefined;
+  }
+}
+
 /** jev に一度だけ問う。異常系はすべて null (fail open) — ADR 0001 決定 5。 */
 export async function ask(state: string, opts: { apiKey?: string; timeoutMs?: number } = {}): Promise<Verdict | null> {
-  const apiKey = opts.apiKey ?? process.env.TYPESAFE_API_KEY;
+  const apiKey = opts.apiKey ?? readApiKey();
   if (!apiKey) return null;
   try {
     const res = await fetch(ENDPOINT(), {

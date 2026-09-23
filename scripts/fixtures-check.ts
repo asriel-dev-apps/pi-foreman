@@ -1,16 +1,16 @@
 // node scripts/fixtures-check.ts — 質問文が意図どおりに効いているかを jev に実際に問う。
-// TYPESAFE_API_KEY が要る。質問文を触ったら必ず回すこと。
+// API キーが要る (環境変数かキーチェーン)。質問文を触ったら必ず回すこと。
 // --mode full (既定・対照) | facts (射影を jev に) | rules (射影をルール表で、キー不要) — ADR 0003 決定 5
 import { readFileSync } from "node:fs";
-import { ask, type Verdict } from "../src/foreman.ts";
+import { ask, readApiKey, type Verdict } from "../src/foreman.ts";
 import { buildState, rulesVerdict } from "../src/state.ts";
 
 const at = process.argv.indexOf("--mode");
 const mode = at >= 0 ? process.argv[at + 1] : "full";
 if (!["full", "facts", "rules"].includes(mode)) throw new Error(`unknown mode: ${mode}`);
 // キーが無いと ask() は黙って null を返し、全件 SKIP になる。原因がわかるよう先に止める
-if (mode !== "rules" && !process.env.TYPESAFE_API_KEY) {
-  console.error("TYPESAFE_API_KEY が設定されていない");
+if (mode !== "rules" && !readApiKey()) {
+  console.error("API キーが無い (環境変数 TYPESAFE_API_KEY もキーチェーンの typesafe-api-key も無い)");
   process.exit(2);
 }
 const judge = async (s: string) =>
