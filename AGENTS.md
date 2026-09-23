@@ -1,5 +1,11 @@
 # pi-foreman
 
+## Project settings
+
+Docs: dev-docs/
+Visibility: public
+Tier: poc
+
 作業状態の正本は [dev-docs/HANDOFF.md](dev-docs/HANDOFF.md)。作業を始める前に読むこと。
 設計の決定とその根拠になった実測は [dev-docs/adr/](dev-docs/adr/)。
 
