@@ -1,37 +1,7 @@
 // pi への配線。判断は src/foreman.ts にあり、ここは state を組んで注入するだけ。
-import { execFileSync } from "node:child_process";
-import { readFileSync } from "node:fs";
-import { basename, join } from "node:path";
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { advise, ask, suggestModel } from "../src/foreman.ts";
-
-/** リポジトリの概要。プロンプト文だけでは規模が読めない依頼があるため (ADR 0001 決定 3)。 */
-function repoSummary(cwd: string): string {
-  const lines = [`repository: ${basename(cwd)}`];
-  try {
-    const agents = readFileSync(join(cwd, "AGENTS.md"), "utf8");
-    const tier = agents.match(/^Tier:.*$/m);
-    if (tier) lines.push(tier[0]);
-  } catch {
-    // AGENTS.md がないリポジトリもある
-  }
-  try {
-    // git リポジトリでないときの fatal を端末に出さない
-    const status = execFileSync("git", ["status", "--porcelain"], {
-      cwd,
-      encoding: "utf8",
-      stdio: ["ignore", "pipe", "ignore"],
-    });
-    const files = status.split("\n").filter(Boolean);
-    if (files.length) {
-      const exts = [...new Set(files.map((l) => l.slice(3).split(".").pop() ?? ""))].slice(0, 5);
-      lines.push(`uncommitted: ${files.length} files (${exts.join(", ")})`);
-    }
-  } catch {
-    // git リポジトリでないこともある
-  }
-  return lines.join("\n");
-}
+import { buildState, modeOf, repoFacts } from "../src/state.ts";
 
 export default function register(pi: ExtensionAPI): void {
   let outstanding: string[] = [];
@@ -42,7 +12,10 @@ export default function register(pi: ExtensionAPI): void {
     const prompt = event.prompt?.trim();
     if (!prompt) return;
 
-    const state = `${prompt}\n\n---\n${repoSummary(ctx.cwd)}`;
+    // 送る範囲は対象リポジトリの `Jev:` 行で決まる。既定は射影だけ (ADR 0003 決定 4)
+    const facts = repoFacts(ctx.cwd);
+    const state = buildState(prompt, facts, modeOf(facts));
+    if (!state) return;
     const verdict = await ask(state);
     if (!verdict) {
       // fail open: 判定が出なくても仕事は止めない (ADR 0001 決定 5)
@@ -58,7 +31,7 @@ export default function register(pi: ExtensionAPI): void {
     if (!lines.length) return;
 
     // 受け入れ前にやることだけ、終わり際に思い出せるよう覚えておく
-    outstanding = lines.filter((l) => /rv|実画面|レポート/.test(l));
+    outstanding = lines.filter((l) => /2 本目|実画面/.test(l));
     ctx.ui.setStatus("foreman", `foreman: ${verdict.kind} / ${suggestModel(verdict)}`);
 
     return {

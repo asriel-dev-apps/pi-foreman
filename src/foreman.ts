@@ -1,7 +1,8 @@
 // 質問文・閾値・ルール表。ここがこのプロジェクトの成果物本体で、拡張は配線にすぎない。
 // pi に依存しないこと: バックテストがこのモジュールを直接読む (ADR 0001 決定 4)。
 
-const ENDPOINT = "https://api.typesafe.ai/v1/systemone";
+// FOREMAN_ENDPOINT はテストのスタブ用 (ADR 0003)。
+const ENDPOINT = () => process.env.FOREMAN_ENDPOINT || "https://api.typesafe.ai/v1/systemone";
 
 export const QUESTIONS = {
   size: {
@@ -36,6 +37,12 @@ export const QUESTIONS = {
     instructions:
       "Could someone who has not seen this conversation start working on this request? Answer no only if the request points back to something said earlier, such as a previous result, a running task, or a correction to prior work. A request that is vague but self-contained is still a yes.",
   },
+  // 判定点 2 (ADR 0003)。サブエージェントを並べる価値があるかだけを問う。
+  parallel: {
+    type: "noul",
+    instructions:
+      "Does this task split into two or more independent pieces of work that different people could do at the same time without waiting on each other? Say no for a single change, a question, or steps that must happen in order.",
+  },
   kind: {
     type: "choice",
     instructions: "What kind of work is this?",
@@ -56,6 +63,7 @@ export type Verdict = {
   risky: number; // 0..1
   visual: number;
   delegable: number;
+  parallel: number;
   kind: string;
   kindConfidence: number;
 };
@@ -65,11 +73,11 @@ export async function ask(state: string, opts: { apiKey?: string; timeoutMs?: nu
   const apiKey = opts.apiKey ?? process.env.TYPESAFE_API_KEY;
   if (!apiKey) return null;
   try {
-    const res = await fetch(ENDPOINT, {
+    const res = await fetch(ENDPOINT(), {
       method: "POST",
       headers: { Authorization: `Bearer ${apiKey}`, "Content-Type": "application/json" },
       body: JSON.stringify({ state, model: "jev-latest", questions: QUESTIONS }),
-      signal: AbortSignal.timeout(opts.timeoutMs ?? 5000),
+      signal: AbortSignal.timeout(opts.timeoutMs ?? 3000),
     });
     if (!res.ok) return null;
     const a = (await res.json())?.answers;
@@ -82,11 +90,12 @@ export async function ask(state: string, opts: { apiKey?: string; timeoutMs?: nu
     const risky = num(a?.risky?.noul, 1);
     const visual = num(a?.visual?.noul, 1);
     const delegable = num(a?.delegable?.noul, 1);
+    const parallel = num(a?.parallel?.noul, 1);
     const kind = typeof a?.kind?.choice === "string" ? a.kind.choice : undefined;
-    if (size === undefined || risky === undefined || visual === undefined || delegable === undefined || !kind) {
+    if (size === undefined || risky === undefined || visual === undefined || delegable === undefined || parallel === undefined || !kind) {
       return null;
     }
-    return { size, risky, visual, delegable, kind, kindConfidence: num(a.kind.confidence, 1) ?? 0 };
+    return { size, risky, visual, delegable, parallel, kind, kindConfidence: num(a.kind.confidence, 1) ?? 0 };
   } catch {
     return null;
   }
@@ -104,29 +113,34 @@ const ADVICE_BY_KIND: Record<string, string> = {
   research: "調べる量が多いなら、別のエージェントに任せて結論だけ受け取る。",
 };
 
+/** 軽いタスク: サブエージェントも rv も HTML も要らない (判定点 1)。 */
+export const isLight = (v: Pick<Verdict, "size" | "risky">) => v.size < 0.5 && v.risky < 0.3;
+
 /** 判定 → 助言の文面。純粋関数なのでネットワークなしで検査できる。 */
 export function advise(v: Verdict): string[] {
   const lines: string[] = [];
 
-  if (v.size < 0.5 && v.risky < 0.3) {
-    lines.push("見立て: 些細なタスク。段取りを足さずそのまま直す。");
+  if (isLight(v)) {
+    lines.push("見立て: 軽いタスク。自分でそのまま直してチャットで報告する。サブエージェント・rv・HTML レポートは要らない。");
   } else {
     lines.push(
       `見立て: 規模 ${v.size.toFixed(1)}/3、取り返しのつかなさ ${(v.risky * 100) | 0}%。`,
     );
+    if (v.size >= 1.0) {
+      lines.push("フローに乗せる変更。受け入れテストで DoD を決めてから実装し、rv と HTML レポートはマイルストーンで。");
+    }
   }
 
-  if (v.delegable >= 0.6 && v.size >= 1.0) {
-    lines.push("委譲できる形をしている。ブリーフを書いてサブエージェントに渡すことを検討する。");
+  if (v.parallel >= 0.6 && v.size >= 1.0) {
+    lines.push("独立した部分に分かれる。並列にサブエージェントへ渡すことを検討する。");
+  } else if (v.delegable >= 0.6 && v.size >= 2.0) {
+    lines.push("重く、委譲できる形をしている。ブリーフを書いてサブエージェントに渡すことを検討する。");
   }
-  if (v.risky >= 0.5 || v.size >= 2.0) {
-    lines.push("受け入れる前に独立したレビュー (rv) を回すこと。");
+  if (v.risky >= 0.5) {
+    lines.push("取り返しがつきにくい。マイルストーンの rv に 2 本目のレビュアーを足す。");
   }
   if (v.visual >= 0.6) {
     lines.push("画面を変える。実装直後に実画面を撮って目で確かめること。");
-  }
-  if (v.size >= 2.0) {
-    lines.push("完了時に HTML 進捗レポートを残す規模。");
   }
   const kindAdvice = v.kindConfidence >= 0.5 ? ADVICE_BY_KIND[v.kind] : undefined;
   if (kindAdvice) lines.push(`${v.kind} の仕事。${kindAdvice}`);
