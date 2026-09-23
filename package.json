@@ -5,7 +5,7 @@
   "type": "module",
   "description": "着手前にタスクを見立てて、進め方の助言を pi に注入する",
   "scripts": {
-    "check": "node scripts/check.ts",
+    "check": "node scripts/check.ts && node scripts/hook-check.ts",
     "fixtures": "node scripts/fixtures-check.ts",
     "backtest": "node scripts/backtest.ts"
   },
