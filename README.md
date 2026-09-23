@@ -34,7 +34,8 @@ export { default } from "/path/to/pi-foreman/extensions/foreman.ts";
 ### Claude Code・Codex
 
 `node /path/to/pi-foreman/bin/hook.ts` を `UserPromptSubmit` と `PreToolUse` のフックに登録する（タイムアウトは 5 秒以上）。
-入出力の形は両者で同じなので、同じコマンドでよい。Codex は初回にフックの信頼を承認する。
+入出力の形は両者で同じなので、同じコマンドでよい。
+`FOREMAN_SHADOW=1 node …/bin/hook.ts` にすると助言をエージェントに渡さず、`~/.local/state/foreman/log.jsonl` に記録だけする（試しに動かして後で分析するとき）。Codex は初回にフックの信頼を承認する。
 
 ## foreman
 
@@ -63,7 +64,7 @@ jev に聞くのは規模・取り返しのつかなさ・画面を変えるか�
 
 - 既定では何も送らない。語彙だけを jev に送る方式も試したが、手元のルール表より当たらなかった（見ていない例で 5/12 対 6/12、全文なら 10/12）
 - 差分・パス・ファイルの中身は、どのモードでも送らない。rv や HTML の入口での判断は手元だけで行う
-- ログ（`~/.local/state/foreman/log.jsonl`）には判定の数値だけを残す
+- ログ（`~/.local/state/foreman/log.jsonl`）には判定・助言・件数を残し、依頼文とパスは残さない
 - API キーは環境変数か macOS のキーチェーンから読む。追跡ファイルには書かない
 
 ## 質問文を変えるとき

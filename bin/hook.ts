@@ -3,9 +3,9 @@
 import { appendFileSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { homedir, tmpdir } from "node:os";
 import { join } from "node:path";
-import { advise, type Verdict } from "../src/foreman.ts";
-import { adviseAtEntry, diffFacts, entryOf } from "../src/milestone.ts";
-import { judge, modeOf, repoFacts } from "../src/state.ts";
+import { advise, ask, type Verdict } from "../src/foreman.ts";
+import { adviseAtEntry, diffFacts, entryOf, RISKY_PATH } from "../src/milestone.ts";
+import { buildState, modeOf, repoFacts, rulesVerdict } from "../src/state.ts";
 
 type Saved = { verdict?: Verdict };
 
@@ -39,7 +39,7 @@ function save(sid: string, s: Saved): void {
   writeFileSync(stateFile(sid), JSON.stringify(s));
 }
 
-/** 見立ての数値だけを残す。依頼文も射影も残さない。 */
+/** 依頼文・射影・パスは残さない (ADR 0003 決定 6)。 */
 function log(entry: Record<string, unknown>): void {
   try {
     const dir = join(homedir(), ".local", "state", "foreman");
@@ -51,11 +51,14 @@ function log(entry: Record<string, unknown>): void {
 }
 
 function emit(event: string, lines: string[]): void {
-  if (!lines.length) return;
+  if (SHADOW || !lines.length) return;
   process.stdout.write(
     JSON.stringify({ hookSpecificOutput: { hookEventName: event, additionalContext: lines.join("\n") } }),
   );
 }
+
+// shadow: 判定はすべて行い、ログにだけ残して文脈には何も足さない (ADR 0003 決定 6)
+const SHADOW = process.env.FOREMAN_SHADOW === "1";
 
 async function main(): Promise<void> {
   const input = JSON.parse(readFileSync(0, "utf8"));
@@ -68,25 +71,43 @@ async function main(): Promise<void> {
     if (!prompt) return;
     const facts = repoFacts(cwd);
     const mode = modeOf(facts);
-    const verdict = await judge(prompt, facts);
-    if (!verdict) return;
-    save(sid, { verdict });
-    // 数値だけ。kind も依頼文から導いた情報なので残さない
-    const { size, risky, visual, delegable, parallel } = verdict;
-    log({ event, mode, size, risky, visual, delegable, parallel });
-    emit(event, [
-      "着手前の見立て (助言であって指示ではない。合わないと思ったら従わなくてよい):",
-      ...advise(verdict).map((l) => `- ${l}`),
-    ]);
+    if (mode === "off") return;
+    // 両方残すのは、Jev: full の repo で同じ依頼に対するルール表と jev を比べるため
+    const rules = rulesVerdict(prompt);
+    const jev = mode === "full" ? await ask(buildState(prompt, facts, "full")!) : null;
+    const verdict = mode === "full" ? jev : rules;
+    const lines = verdict
+      ? ["着手前の見立て (助言であって指示ではない。合わないと思ったら従わなくてよい):", ...advise(verdict).map((l) => `- ${l}`)]
+      : [];
+    if (verdict) save(sid, { verdict });
+    log({ event, session_id: sid, transcript_path: input.transcript_path ?? null, shadow: SHADOW, mode, rules, jev, advice: lines });
+    emit(event, lines);
     return;
   }
 
   if (event === "PreToolUse") {
-    const entry = entryOf(String(input.tool_name ?? ""), input.tool_input);
+    const tool = String(input.tool_name ?? "");
+    const entry = entryOf(tool, input.tool_input);
     if (!entry) return;
-    const lines = adviseAtEntry(entry, load(sid).verdict, diffFacts(cwd), claimer(sid));
-    if (!lines.length) return;
-    log({ event, entry, advised: lines.length });
+    const diff = diffFacts(cwd);
+    const kinds: string[] = [];
+    const claim = claimer(sid);
+    const lines = adviseAtEntry(entry, load(sid).verdict, diff, (key) => {
+      const ok = claim(key);
+      if (ok) kinds.push(key === "risky" ? "risky" : "milestone");
+      return ok;
+    });
+    // 助言の有無にかかわらず 1 行。パスは残さず件数だけ (助言の文面はパスを含むので種類だけ)
+    log({
+      event,
+      session_id: sid,
+      shadow: SHADOW,
+      tool_name: tool,
+      entry,
+      diffLines: diff?.lines ?? null,
+      riskyHits: diff ? diff.paths.filter((p) => RISKY_PATH.test(p)).length : 0,
+      advice: kinds,
+    });
     emit(event, lines);
   }
 }

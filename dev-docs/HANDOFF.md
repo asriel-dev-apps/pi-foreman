@@ -24,8 +24,9 @@ pi の拡張と、Claude Code・Codex 共通のフック（`bin/hook.ts`）。�
 1. 既定（`Jev:` 行なし）はルール表で判定し、何も送らない。射影を jev に送る方式は holdout で 5/12 と
    ルール表 6/12 に負けたので使っていない（ADR 0003 決定 5）。ルール表の語彙は **holdout に合わせて直さない**
 2. `parallel` は full で正例・負例とも通った。射影では正例 2 件とも落ちる
-3. フックを登録し（Claude の settings.json、Codex の hooks.json。ユーザーが適用）、実セッションで
-   助言が文脈に届くことを確かめる。終了コード 0 は届いた証拠にならない
+3. まず `FOREMAN_SHADOW=1` で登録し（Claude の settings.json、Codex の hooks.json。ユーザーが適用）、ログを溜める。
+   分析は `session_id`・`transcript_path` でトランスクリプトと突き合わせる（ADR 0003 決定 6）。
+   shadow を外したら、実セッションで助言が文脈に届くことを確かめる。終了コード 0 は届いた証拠にならない
 4. 助言が実際に行動を変えたか、しばらく使って見る
 
 ## 触るときの注意
