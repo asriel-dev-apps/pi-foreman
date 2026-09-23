@@ -134,7 +134,8 @@ shadow でも同じに働かせ、「出していたはずの助言」を記録�
 - `UserPromptSubmit`: `session_id`、`transcript_path`、`mode`、`rules`（ルール表の見立て）、`jev`（`Jev: full` のときの jev の見立て、
   それ以外は `null`）、`advice`（出していたはずの助言の行。採用する見立ては通常時と同じ）
 - `PreToolUse`: 入口に当たったときは助言の有無にかかわらず 1 行。`session_id`、`tool_name`、`entry`（`rv` か `html`）、
-  `diffLines`、`riskyHits`（当たったパスの**件数**）、`advice`
+  `diffLines`、`riskyHits`（当たったパスの**件数**）、`advice`（出していたはずの助言の種類。`milestone` と `risky` の
+  配列。文面は判定点 4 でパスを含むので残さない）
 
 ログに依頼文・射影・パスは残さない。分析では `session_id` と `transcript_path` でトランスクリプトと突き合わせ、
 「軽いと見立てたのに rv や HTML に進んだセッション」「危ないパスに当たったのに 2 本目が無かった rv」などを数える。
