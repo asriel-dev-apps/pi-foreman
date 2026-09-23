@@ -4,7 +4,7 @@
 import assert from "node:assert";
 import { spawn, execFileSync } from "node:child_process";
 import { createServer, type Server } from "node:http";
-import { mkdtempSync, writeFileSync, mkdirSync } from "node:fs";
+import { mkdtempSync, writeFileSync, mkdirSync, readFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -168,8 +168,10 @@ function hookInput(o: Record<string, unknown>): string {
   return JSON.stringify(o);
 }
 
-function userPromptSubmit(sessionId: string, cwd: string, prompt = PROMPT) {
-  return hookInput({ hook_event_name: "UserPromptSubmit", session_id: sessionId, cwd, prompt });
+function userPromptSubmit(sessionId: string, cwd: string, prompt = PROMPT, opts: { transcriptPath?: string } = {}) {
+  const o: Record<string, unknown> = { hook_event_name: "UserPromptSubmit", session_id: sessionId, cwd, prompt };
+  if (opts.transcriptPath !== undefined) o.transcript_path = opts.transcriptPath;
+  return hookInput(o);
 }
 
 function preToolUse(sessionId: string, cwd: string, toolName: string, toolInput: unknown) {
@@ -182,6 +184,74 @@ function assertExitOk(r: HookResult, note: string) {
 
 function assertNoStdout(r: HookResult, note: string) {
   assert.equal(r.stdout.trim(), "", `${note}: 標準出力は空のはず。got: ${r.stdout.slice(0, 300)}`);
+}
+
+// ---- shadow モード (決定6) のためのヘルパー ---------------------------------
+
+/** ログには依頼文・射影・パスを残さないはず。 */
+function withShadow(env: NodeJS.ProcessEnv): NodeJS.ProcessEnv {
+  return { ...env, FOREMAN_SHADOW: "1" };
+}
+
+function logPath(scn: Scenario): string {
+  return join(scn.homeDir, ".local", "state", "foreman", "log.jsonl");
+}
+
+/** ログの生テキスト。ファイルが無ければ空文字列。 */
+function readLogRaw(scn: Scenario): string {
+  try {
+    return readFileSync(logPath(scn), "utf8");
+  } catch {
+    return "";
+  }
+}
+
+/** ログを 1 行 1 JSON としてパースした配列。ファイルが無ければ空配列。 */
+function readLogLines(scn: Scenario): any[] {
+  const raw = readLogRaw(scn);
+  return raw
+    .split("\n")
+    .filter(Boolean)
+    .map((l) => JSON.parse(l));
+}
+
+async function shadowScenarioWithLightVerdict(sessionId: string) {
+  const stub = await startStub(() => ok200(jevBody({ size: 0, risky: 0.05 })));
+  const scn = freshScenario(stub.url);
+  scn.env = withShadow(scn.env);
+  initRepo(scn.repoDir, scn.env);
+  writeAgents(scn, "Jev: full\n");
+  commitAll(scn.repoDir, scn.env, "init");
+  const pre = await runHook(scn.repoDir, scn.env, userPromptSubmit(sessionId, scn.repoDir));
+  assertExitOk(pre, `準備 shadow UserPromptSubmit (${sessionId})`);
+  await stub.close();
+  return scn;
+}
+
+async function shadowScenarioWithVerdictAndDiff(
+  sessionId: string,
+  verdict: { size: number; risky: number },
+  addedLines: number,
+  extraFile?: string,
+) {
+  const stub = await startStub(() => ok200(jevBody(verdict)));
+  const scn = freshScenario(stub.url);
+  scn.env = withShadow(scn.env);
+  initRepo(scn.repoDir, scn.env);
+  writeAgents(scn, "Jev: full\n");
+  writeFileSync(join(scn.repoDir, "base.txt"), "base\n");
+  commitAll(scn.repoDir, scn.env, "init on main");
+  git(scn.repoDir, ["checkout", "-q", "-b", "feature"], scn.env);
+  writeFileSync(join(scn.repoDir, "src.txt"), nLines(addedLines));
+  if (extraFile) {
+    mkdirSync(join(scn.repoDir, extraFile.split("/").slice(0, -1).join("/")), { recursive: true });
+    writeFileSync(join(scn.repoDir, extraFile), "-- risky change --\n");
+  }
+  commitAll(scn.repoDir, scn.env, "diff on feature");
+  const pre = await runHook(scn.repoDir, scn.env, userPromptSubmit(sessionId, scn.repoDir));
+  assertExitOk(pre, `準備 shadow UserPromptSubmit (${sessionId})`);
+  await stub.close();
+  return scn;
 }
 
 function parseAdvice(r: HookResult, note: string): { hookSpecificOutput: { hookEventName: string; additionalContext: string } } {
@@ -210,6 +280,34 @@ check("Jev 行が無いリポジトリでは依頼文もリポジトリ名もパ
   const r = await runHook(scn.repoDir, scn.env, userPromptSubmit("s-noline", scn.repoDir));
   assertExitOk(r, "Jev 行なし");
   assertProjectedOnly(stub.requests, scn, "Jev 行なし");
+  await stub.close();
+});
+
+check("Jev 行が無いリポジトリでは、スタブへの送信が一度も起きない (決定4・5の結果: 既定はルール表で判定しどこにも送らない)", async () => {
+  const stub = await startStub(() => ok200(jevBody({})));
+  const scn = freshScenario(stub.url);
+  initRepo(scn.repoDir, scn.env);
+  writeFileSync(join(scn.repoDir, "README.md"), "hello\n");
+  commitAll(scn.repoDir, scn.env, "init"); // AGENTS.md 無し、または Jev 行が無い状態
+  const r = await runHook(scn.repoDir, scn.env, userPromptSubmit("s-noline-zero", scn.repoDir));
+  assertExitOk(r, "Jev 行なし/ゼロ送信");
+  assert.equal(stub.requests.length, 0, "Jev 行が無いのにスタブへ送信が起きた (決定5の結果に反する)");
+  await stub.close();
+});
+
+check("Jev 行が無いリポジトリでも、送信ゼロのまま UserPromptSubmit の助言 (ルール表由来) は出る", async () => {
+  const stub = await startStub(() => ok200(jevBody({})));
+  const scn = freshScenario(stub.url);
+  initRepo(scn.repoDir, scn.env);
+  writeFileSync(join(scn.repoDir, "README.md"), "hello\n");
+  commitAll(scn.repoDir, scn.env, "init"); // Jev 行なし
+  const prompt = "この関数は何をしていますか？";
+  const r = await runHook(scn.repoDir, scn.env, userPromptSubmit("s-rules-light", scn.repoDir, prompt));
+  assertExitOk(r, "ルール表/軽い質問");
+  assert.equal(stub.requests.length, 0, "ルール表判定のはずがスタブへ送信が起きた");
+  // 「軽いタスク」の判定そのもの (rulesVerdict の語彙・閾値) は ADR が固定していないので断定しない。
+  // 助言そのものは UserPromptSubmit の判定点1が必ず返す (決定2)。
+  parseAdvice(r, "ルール表/軽い質問");
   await stub.close();
 });
 
@@ -250,6 +348,16 @@ check("git リポジトリの外では Jev: full と書いてあっても射影�
   const r = await runHook(scn.repoDir, scn.env, userPromptSubmit("s-nogit", scn.repoDir));
   assertExitOk(r, "git 外");
   assertProjectedOnly(stub.requests, scn, "git 外");
+  await stub.close();
+});
+
+check("git リポジトリの外では Jev: full と書いてあってもスタブへの送信が一度も起きない (決定4・5の結果)", async () => {
+  const stub = await startStub(() => ok200(jevBody({})));
+  const scn = freshScenario(stub.url, { repoDirName: REPO_NAME_TOKEN });
+  writeAgents(scn, "Jev: full\n");
+  const r = await runHook(scn.repoDir, scn.env, userPromptSubmit("s-nogit-zero", scn.repoDir));
+  assertExitOk(r, "git 外/ゼロ送信");
+  assert.equal(stub.requests.length, 0, "git の外なのにスタブへ送信が起きた (決定5の結果に反する)");
   await stub.close();
 });
 
@@ -655,6 +763,146 @@ check("SessionStart イベントには助言が出ない", async () => {
   const r = await runHook(scn.repoDir, scn.env, hookInput({ hook_event_name: "SessionStart", session_id: sessionId, cwd: scn.repoDir }));
   assertExitOk(r, "SessionStart");
   assertNoStdout(r, "SessionStart");
+});
+
+// ===========================================================================
+// 11. shadow モード (決定6, 2026-09-23 追記): 標準出力に何も書かず、判定をログに残す
+// ===========================================================================
+
+check(
+  "shadow: Jev: full の UserPromptSubmit は標準出力なしでログに1行残る (transcript_path・mode・rules・jev・advice, 依頼文は残らない)",
+  async () => {
+    const stub = await startStub(() => ok200(jevBody({ size: 0, risky: 0.05 })));
+    const scn = freshScenario(stub.url);
+    scn.env = withShadow(scn.env);
+    initRepo(scn.repoDir, scn.env);
+    writeAgents(scn, "Jev: full\n");
+    commitAll(scn.repoDir, scn.env, "init");
+    const transcriptPath = "/tmp/shadow-transcript-abc.jsonl";
+    const r = await runHook(
+      scn.repoDir,
+      scn.env,
+      userPromptSubmit("s-shadow-full", scn.repoDir, PROMPT, { transcriptPath }),
+    );
+    assertExitOk(r, "shadow/full");
+    assertNoStdout(r, "shadow/full: shadow では標準出力に何も書かないはず");
+    const raw = readLogRaw(scn);
+    assert.doesNotMatch(raw, new RegExp(PROMPT_TOKEN), "shadow/full: ログに依頼文の全文が残っている");
+    const entry = readLogLines(scn).find((l) => l.session_id === "s-shadow-full" && !("tool_name" in l));
+    assert.ok(entry, "shadow/full: UserPromptSubmit のログ行が無い");
+    assert.equal(entry.transcript_path, transcriptPath, "shadow/full: transcript_path が入力値と一致しない");
+    assert.equal(entry.mode, "full");
+    assert.ok(
+      entry.rules && typeof entry.rules.size === "number" && typeof entry.rules.risky === "number",
+      "shadow/full: rules (ルール表の見立て) が無いか size/risky が数値でない",
+    );
+    assert.ok(entry.jev && typeof entry.jev.size === "number", "shadow/full: jev (jev の見立て) が記録されていない");
+    assert.ok(
+      Array.isArray(entry.advice) && entry.advice.every((s: unknown) => typeof s === "string"),
+      "shadow/full: advice が文字列の配列でない",
+    );
+    // jev の見立てが軽いタスク (size 0, risky 0.05) なので、採用する見立ては通常時と同じはず (決定6・決定3)。
+    assert.ok(
+      entry.advice.some((s: string) => /軽いタスク/.test(s)),
+      "shadow/full: jev が軽いタスクと見立てたのに advice に「軽いタスク」の助言が無い (採用する見立てが通常時と違う)",
+    );
+    await stub.close();
+  },
+);
+
+check("shadow: Jev 行が無いリポジトリの UserPromptSubmit はログに mode=facts・jev=null で残り、スタブへの送信は起きない", async () => {
+  const stub = await startStub(() => ok200(jevBody({})));
+  const scn = freshScenario(stub.url);
+  scn.env = withShadow(scn.env);
+  initRepo(scn.repoDir, scn.env);
+  writeFileSync(join(scn.repoDir, "README.md"), "hello\n");
+  commitAll(scn.repoDir, scn.env, "init"); // Jev 行なし
+  const r = await runHook(scn.repoDir, scn.env, userPromptSubmit("s-shadow-facts", scn.repoDir));
+  assertExitOk(r, "shadow/facts");
+  assertNoStdout(r, "shadow/facts: shadow では標準出力に何も書かないはず");
+  assert.equal(stub.requests.length, 0, "shadow/facts: Jev 行が無いのにスタブへ送信が起きた");
+  const entry = readLogLines(scn).find((l) => l.session_id === "s-shadow-facts");
+  assert.ok(entry, "shadow/facts: ログ行が無い");
+  assert.equal(entry.mode, "facts");
+  assert.equal(entry.jev, null, "shadow/facts: jev は null のはず (Jev: full 以外)");
+  await stub.close();
+});
+
+check("shadow: PreToolUse rv 入口 (Skill review) は標準出力なしでログに1行残る (tool_name・entry・diffLines・riskyHits・advice に milestone)", async () => {
+  const sessionId = "s-shadow-rv-milestone";
+  const scn = await shadowScenarioWithLightVerdict(sessionId);
+  const r = await runHook(scn.repoDir, scn.env, preToolUse(sessionId, scn.repoDir, "Skill", { skill: "review" }));
+  assertExitOk(r, "shadow/rv");
+  assertNoStdout(r, "shadow/rv: shadow では標準出力に何も書かないはず");
+  const lines = readLogLines(scn).filter((l) => l.session_id === sessionId && l.tool_name === "Skill");
+  assert.equal(lines.length, 1, `shadow/rv: 入口に当たったら1行のはず (決定6)。got ${lines.length} 行`);
+  const entry = lines[0];
+  assert.equal(entry.entry, "rv");
+  assert.equal(typeof entry.diffLines, "number", "shadow/rv: diffLines が数値でない");
+  assert.equal(typeof entry.riskyHits, "number", "shadow/rv: riskyHits が数値でない");
+  assert.ok(Array.isArray(entry.advice) && entry.advice.includes("milestone"), "shadow/rv: advice に milestone が無い");
+});
+
+check(
+  "shadow: 危険パス (db/migrations/001.sql) に触れた rv 入口はログの advice に risky・riskyHits>=1 が残るが、パス文字列自体は残らない",
+  async () => {
+    const sessionId = "s-shadow-rv-risky";
+    const scn = await shadowScenarioWithVerdictAndDiff(sessionId, { size: 2.5, risky: 0.1 }, 25, "db/migrations/001.sql");
+    const r = await runHook(scn.repoDir, scn.env, preToolUse(sessionId, scn.repoDir, "Skill", { skill: "review" }));
+    assertExitOk(r, "shadow/rv-risky");
+    assertNoStdout(r, "shadow/rv-risky: shadow では標準出力に何も書かないはず");
+    const raw = readLogRaw(scn);
+    assert.doesNotMatch(raw, /migrations/, "shadow/rv-risky: ログに変更パスの文字列 (migrations) が残っている");
+    const lines = readLogLines(scn).filter((l) => l.session_id === sessionId && l.tool_name === "Skill");
+    assert.equal(lines.length, 1, `shadow/rv-risky: 入口に当たったら1行のはず (決定6)。got ${lines.length} 行`);
+    const entry = lines[0];
+    assert.ok(Array.isArray(entry.advice) && entry.advice.includes("risky"), "shadow/rv-risky: advice に risky が無い");
+    assert.ok(typeof entry.riskyHits === "number" && entry.riskyHits >= 1, "shadow/rv-risky: riskyHits が1未満");
+  },
+);
+
+check("shadow: 助言が無い rv 入口 (重い・大差分・非危険パス) でも、助言の有無にかかわらず advice: [] のログ1行が残る", async () => {
+  const sessionId = "s-shadow-rv-noadvice";
+  const scn = await shadowScenarioWithVerdictAndDiff(sessionId, { size: 2.5, risky: 0.1 }, 21);
+  const r = await runHook(scn.repoDir, scn.env, preToolUse(sessionId, scn.repoDir, "Skill", { skill: "review" }));
+  assertExitOk(r, "shadow/rv-noadvice");
+  assertNoStdout(r, "shadow/rv-noadvice: shadow では標準出力に何も書かないはず");
+  const lines = readLogLines(scn).filter((l) => l.session_id === sessionId && l.tool_name === "Skill");
+  assert.equal(lines.length, 1, `shadow/rv-noadvice: 助言の有無にかかわらず1行残るはず (決定6)。got ${lines.length} 行`);
+  assert.deepEqual(lines[0].advice, [], "shadow/rv-noadvice: advice は空配列のはず");
+});
+
+check("shadow: rv/HTML と無関係なツール (Read) はログに行を残さない", async () => {
+  const sessionId = "s-shadow-read";
+  const scn = await shadowScenarioWithLightVerdict(sessionId);
+  const before = readLogLines(scn).length;
+  const r = await runHook(scn.repoDir, scn.env, preToolUse(sessionId, scn.repoDir, "Read", { file_path: "src/foo.ts" }));
+  assertExitOk(r, "shadow/Read");
+  assertNoStdout(r, "shadow/Read: shadow では標準出力に何も書かないはず");
+  const after = readLogLines(scn);
+  assert.equal(after.length, before, "shadow/Read: 対象外ツールなのにログ行が増えた");
+  assert.ok(!after.some((l) => l.tool_name === "Read"), "shadow/Read: Read のログ行が残っている");
+});
+
+check("shadow でも1セッション1回の制限 (決定3) が働く: 同じセッションで rv 入口を2回踏むと、2回目のログの advice に milestone は含まれない", async () => {
+  const sessionId = "s-shadow-once";
+  const scn = await shadowScenarioWithLightVerdict(sessionId);
+  const first = await runHook(scn.repoDir, scn.env, preToolUse(sessionId, scn.repoDir, "Skill", { skill: "review" }));
+  assertExitOk(first, "shadow/once 1回目");
+  assertNoStdout(first, "shadow/once 1回目: shadow では標準出力に何も書かないはず");
+  const second = await runHook(scn.repoDir, scn.env, preToolUse(sessionId, scn.repoDir, "Skill", { skill: "review" }));
+  assertExitOk(second, "shadow/once 2回目");
+  assertNoStdout(second, "shadow/once 2回目: shadow では標準出力に何も書かないはず");
+  const lines = readLogLines(scn).filter((l) => l.session_id === sessionId && l.tool_name === "Skill");
+  assert.equal(lines.length, 2, `shadow/once: 入口を2回踏んだら2行のはず (決定6)。got ${lines.length} 行`);
+  assert.ok(
+    Array.isArray(lines[0].advice) && lines[0].advice.includes("milestone"),
+    "shadow/once: 1回目の advice に milestone が無い (前提)",
+  );
+  assert.ok(
+    Array.isArray(lines[1].advice) && !lines[1].advice.includes("milestone"),
+    "shadow/once: 2回目の advice に milestone が残っている (1セッション1回の制限が shadow で働いていない)",
+  );
 });
 
 // ===========================================================================
