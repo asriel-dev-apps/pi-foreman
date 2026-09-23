@@ -1,7 +1,7 @@
 // jev に何を送るか (ADR 0003 決定 4)。既定は閉じた側: 依頼文を固定の語彙に写した「射影」だけを送る。
 import { execFileSync } from "node:child_process";
 import { readFileSync } from "node:fs";
-import { basename, join } from "node:path";
+import { basename, extname, join } from "node:path";
 import type { Verdict } from "./foreman.ts";
 
 export type Mode = "full" | "facts" | "off";
@@ -33,6 +33,10 @@ export function tokens(prompt: string): string[] {
   return Object.keys(VOCAB).filter((k) => VOCAB[k].test(prompt));
 }
 
+const KNOWN_EXTS = new Set(
+  "ts tsx js jsx mjs cjs json md mdx html css scss py rb go rs java kt swift dart c h cc cpp cs php sh zsh toml yaml yml sql lock txt svg png".split(" "),
+);
+
 type RepoFacts = { name?: string; tier?: string; jev?: string; uncommitted: number; exts: string[] };
 
 /** cwd のリポジトリから、送信の判断と state に使う事実を集める。git の外なら null。 */
@@ -42,6 +46,7 @@ export function repoFacts(cwd: string): RepoFacts | null {
     top = execFileSync("git", ["rev-parse", "--show-toplevel"], {
       cwd,
       encoding: "utf8",
+      timeout: 1500,
       stdio: ["ignore", "pipe", "ignore"],
     }).trim();
   } catch {
@@ -59,12 +64,16 @@ export function repoFacts(cwd: string): RepoFacts | null {
     const files = execFileSync("git", ["status", "--porcelain"], {
       cwd: top,
       encoding: "utf8",
+      timeout: 1500,
       stdio: ["ignore", "pipe", "ignore"],
     })
       .split("\n")
       .filter(Boolean);
     facts.uncommitted = files.length;
-    facts.exts = [...new Set(files.map((l) => l.slice(3).split(".").pop() ?? ""))].slice(0, 5);
+    // 拡張子は既知のものだけ。拡張子の無いファイル名がそのまま出るのを防ぐ
+    facts.exts = [...new Set(files.map((l) => extname(l.slice(3).trim()).slice(1).toLowerCase()))]
+      .filter((e) => KNOWN_EXTS.has(e))
+      .slice(0, 5);
   } catch {
     // 読めなければ 0 件のまま
   }
@@ -95,7 +104,7 @@ export function buildState(prompt: string, facts: RepoFacts | null, mode: Mode):
   lines.push(`request length: ${len}`);
   if (facts) {
     if (facts.tier && /^(poc|product|none)$/.test(facts.tier)) lines.push(`Tier: ${facts.tier}`);
-    const exts = facts.exts.filter((e) => /^[A-Za-z0-9]{1,5}$/.test(e));
+    const exts = facts.exts.filter((e) => KNOWN_EXTS.has(e));
     if (facts.uncommitted) lines.push(`uncommitted: ${facts.uncommitted} files (${exts.join(", ")})`);
   }
   return lines.join("\n");

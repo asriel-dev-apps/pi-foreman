@@ -56,10 +56,12 @@ pi は拡張（`extensions/foreman.ts`）のまま。判定点 1・2 だけを�
 | 何が起きるか | 入口 | 拾い方 |
 |---|---|---|
 | rv | Claude の `Skill`（skill 名 `review`） | `tool_name` と `tool_input.skill` |
-| rv | Bash で別 family のレビュアーを起動（`codex exec` / `claude -p`、herdr の `pane run` 経由も含む） | review skill が必ず書く `rv-brief` をコマンドに含む |
-| HTML | `Write` / `Edit`、Codex の `apply_patch` | `tool_input` を文字列にして `reports/….html` を含む |
-| HTML | Bash のヒアドキュメントやリダイレクト | 同上 |
-| HTML | `reporter` エージェント | `tool_name` が `Agent`、`subagent_type` が `reporter` |
+| rv | Bash で別 family のレビュアーを起動（`codex exec` / `claude -p`、herdr の `pane run` 経由も含む） | コマンドが review skill の `rv-brief` を含み、かつ `codex … exec` か `claude -p` を含む |
+| HTML | `Write` / `Edit` の `file_path`、Codex の `apply_patch` のパッチ本文 | `reports/….html` を含む |
+| HTML | Bash のリダイレクトや `tee` | 書き込み先が `reports/….html` |
+| HTML | Claude の `reporter` エージェント | `tool_name` が `Agent`、`subagent_type` が `reporter`（Codex には reporter エージェントが無いので対象外） |
+
+読むだけの操作（`Read`、`cat`、`open`）は拾わない。
 
 助言は 1 セッションにつき 1 回まで。数える単位は「rv 入口での判定点 3」「HTML 入口での判定点 3」「判定点 4」の 3 つ。
 同じ助言を繰り返すと読まれなくなる。`UserPromptSubmit` を経ていないセッション（見立てなし）では、差分の大きさと
@@ -68,8 +70,11 @@ pi は拡張（`extensions/foreman.ts`）のまま。判定点 1・2 だけを�
 判定点 3 の助言は、rv か HTML の入口で、次のどちらかのときに出す。文面に「マイルストーン」を含む。
 
 - 保存した見立てが軽いタスク（`size < 0.5` かつ `risky < 0.3`）
-- 差分が小さい: 基点からの追加行と削除行の合計（未コミットを含む）が 20 行以下。基点は
-  `origin/HEAD`、`main`、`master` の順で最初に解決できたものとの merge-base。どれも無ければ `HEAD`
+- 差分が小さい: 基点からの追加行と削除行の合計（未コミット・未追跡を含む）が 20 行以下。バイナリと
+  1MB 以上の未追跡ファイルは大きさ不明として 1000 行に数える。基点は `@{upstream}`、`origin/HEAD`、
+  `origin/main`、`origin/master`、`main`、`master` の順に merge-base を取り、HEAD と異なる最初のもの
+  （今いるブランチ自身を基点にすると、コミット済みの作業が消える）。どれも HEAD と同じなら HEAD、
+  コミットが無ければ空の木
 
 判定点 4 の助言は rv の入口でだけ、変更パス（基点からの差分と未コミット）のどれかが次に当たったときに出す。
 文面に「2 本目のレビュアー」と、当たったパスを 3 件まで含む（パスは手元に出すだけで、送らない）。
@@ -95,7 +100,8 @@ jev の応答は `{"answers": {"size": {"score"}, "risky": {"noul"}, "visual": {
 | 無い・それ以外・git リポジトリの外 | **射影**だけ（下記） |
 
 **射影**は、依頼文を固定の語彙に写したもの。依頼文に当たった語彙の名前（`fix` `ui` `auth` など）、
-文字数の区分、未コミットのファイル数、拡張子（英数字 5 文字以内のものだけ）、`Tier:` の値
+文字数の区分、未コミットのファイル数、拡張子（既知の拡張子の一覧に載るものだけ。拡張子の無いファイル名が
+そのまま出る穴がレビューで見つかった）、`Tier:` の値
 （`poc` `product` `none` のどれかのときだけ）を並べる。リポジトリ名もパスも入れない。
 
 **射影に出るのは、このリポジトリに書いた語彙と数字だけなので、依頼文の中身は構造上出ない。**
@@ -127,5 +133,5 @@ jev の応答は `{"answers": {"size": {"score"}, "risky": {"noul"}, "visual": {
 ## 運用上の前提
 
 - フックの登録は各ハーネスの設定ファイルで行う。Codex は初回に hook の信頼を承認する
-- API 呼び出しのタイムアウトは 3 秒。フック自体のタイムアウトは 5 秒以上にする（`UserPromptSubmit` はタイムアウトすると出力が捨てられる）
-- ログには見立ての数値だけを残し、依頼文も射影も残さない（`~/.local/state/foreman/log.jsonl`）
+- API 呼び出しのタイムアウトは 3 秒、git 1 回あたり 1.5 秒。フック自体のタイムアウトは 5 秒以上にする（`UserPromptSubmit` はタイムアウトすると出力が捨てられる）
+- ログには見立ての数値だけを残し、依頼文も射影も `kind` も残さない（`~/.local/state/foreman/log.jsonl`）

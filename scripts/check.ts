@@ -2,7 +2,11 @@
 import assert from "node:assert";
 import { advise, suggestModel, type Verdict } from "../src/foreman.ts";
 import { adviseAtEntry, entryOf } from "../src/milestone.ts";
-import { buildState, modeOf, tokens } from "../src/state.ts";
+import { execFileSync } from "node:child_process";
+import { mkdtempSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { buildState, modeOf, repoFacts, tokens } from "../src/state.ts";
 
 const v = (o: Partial<Verdict> = {}): Verdict => ({
   size: 0,
@@ -69,6 +73,15 @@ assert.deepEqual(new Set(kw), new Set(["fix", "ui", "auth"]));
 assert.ok(buildState(secret, facts, "full")!.includes("ミズホラ"));
 assert.equal(buildState(secret, facts, "off"), null);
 
+// 拡張子の無いファイル名や、単語の拡張子が射影に出ない (レビュー指摘: ACME がそのまま送られた)
+const repo = mkdtempSync(join(tmpdir(), "foreman-check-"));
+execFileSync("git", ["init", "-q"], { cwd: repo });
+for (const f of ["ACME", "plan.ACMECORP", "a.ts"]) writeFileSync(join(repo, f), "x\n");
+const rf = repoFacts(repo)!;
+assert.deepEqual(rf.exts, ["ts"]);
+const p2 = buildState("直して", rf, "facts")!;
+assert.ok(!/ACME/i.test(p2) && !p2.includes(rf.name!), p2);
+
 // 入口の判定 (ADR 0003 決定 3 の表)
 assert.equal(entryOf("Skill", { skill: "review" }), "rv");
 assert.equal(entryOf("Skill", { skill: "diff-review" }), null);
@@ -80,21 +93,31 @@ assert.equal(entryOf("Bash", { command: "cat > reports/a.html <<EOF" }), "html")
 assert.equal(entryOf("Agent", { subagent_type: "reporter" }), "html");
 assert.equal(entryOf("Read", { file_path: "a.ts" }), null);
 assert.equal(entryOf("Bash", { command: "ls" }), null);
+// 読むだけ・レビュアーを起動しない操作は拾わない
+assert.equal(entryOf("Read", { file_path: "/repo/reports/status.html" }), null);
+assert.equal(entryOf("Bash", { command: "cat reports/status.html" }), null);
+assert.equal(entryOf("Bash", { command: "open project-docs/p/reports/a/index.html" }), null);
+assert.equal(entryOf("Bash", { command: "cat rv-brief.md" }), null);
+assert.equal(entryOf("Bash", { command: "node build.js | tee reports/a.html" }), "html");
 
 // 入口での助言: 軽い見立て → マイルストーン。1 セッション 1 回
-const seen = new Set<string>();
+const once = () => {
+  const s = new Set<string>();
+  return (k: string) => (s.has(k) ? false : (s.add(k), true));
+};
+const seen = once();
 assert.match(adviseAtEntry("rv", v({ size: 0.2 }), { lines: 500, paths: [] }, seen).join(), /マイルストーン/);
 assert.equal(adviseAtEntry("rv", v({ size: 0.2 }), { lines: 500, paths: [] }, seen).length, 0);
 // 重い見立て・大きい差分・危なくない → 何も言わない
-assert.equal(adviseAtEntry("rv", v({ size: 2.5 }), { lines: 500, paths: ["src/a.ts"] }, new Set()).length, 0);
+assert.equal(adviseAtEntry("rv", v({ size: 2.5 }), { lines: 500, paths: ["src/a.ts"] }, once()).length, 0);
 // 小さい差分 → マイルストーン
-assert.match(adviseAtEntry("html", v({ size: 2.5 }), { lines: 12, paths: [] }, new Set()).join(), /マイルストーン/);
+assert.match(adviseAtEntry("html", v({ size: 2.5 }), { lines: 12, paths: [] }, once()).join(), /マイルストーン/);
 // 危ないパスは rv でだけ
 const risky = { lines: 500, paths: ["db/migrations/001.sql", "src/a.ts"] };
-const atRv = adviseAtEntry("rv", v({ size: 2.5 }), risky, new Set()).join();
+const atRv = adviseAtEntry("rv", v({ size: 2.5 }), risky, once()).join();
 assert.match(atRv, /2 本目のレビュアー/);
 assert.match(atRv, /db\/migrations\/001\.sql/);
 assert.doesNotMatch(atRv, /src\/a\.ts/);
-assert.doesNotMatch(adviseAtEntry("html", v({ size: 2.5 }), risky, new Set()).join(), /2 本目/);
+assert.doesNotMatch(adviseAtEntry("html", v({ size: 2.5 }), risky, once()).join(), /2 本目/);
 
 console.log("ok");
