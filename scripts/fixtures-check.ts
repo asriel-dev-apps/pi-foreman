@@ -8,6 +8,11 @@ import { buildState, rulesVerdict } from "../src/state.ts";
 const at = process.argv.indexOf("--mode");
 const mode = at >= 0 ? process.argv[at + 1] : "full";
 if (!["full", "facts", "rules"].includes(mode)) throw new Error(`unknown mode: ${mode}`);
+// キーが無いと ask() は黙って null を返し、全件 SKIP になる。原因がわかるよう先に止める
+if (mode !== "rules" && !process.env.TYPESAFE_API_KEY) {
+  console.error("TYPESAFE_API_KEY が設定されていない");
+  process.exit(2);
+}
 const judge = async (s: string) =>
   mode === "rules" ? rulesVerdict(s) : ask(mode === "facts" ? buildState(s, null, "facts")! : s);
 
