@@ -125,6 +125,21 @@ jev の応答は `{"answers": {"size": {"score"}, "risky": {"noul"}, "visual": {
 既定ではどこにも送らずルール表で判定する。依頼文を全文読ませたときだけ jev の価値が出る。
 語彙はフィクスチャを見て作ったので、件数には過学習が含まれる。個々の食い違いを読む。
 
+### 6. まず shadow で動かし、ログで後から分析する（2026-09-23 追記）
+
+環境変数 `FOREMAN_SHADOW=1` のとき、フックは判定をすべて行うが**標準出力に何も書かない**（エージェントの文脈に何も足さない）。
+代わりに判定をログ（`~/.local/state/foreman/log.jsonl`、1 行 1 JSON）に残す。1 セッション 1 回の制限（決定 3）は
+shadow でも同じに働かせ、「出していたはずの助言」を記録する。
+
+- `UserPromptSubmit`: `session_id`、`transcript_path`、`mode`、`rules`（ルール表の見立て）、`jev`（`Jev: full` のときの jev の見立て、
+  それ以外は `null`）、`advice`（出していたはずの助言の行。採用する見立ては通常時と同じ）
+- `PreToolUse`: 入口に当たったときは助言の有無にかかわらず 1 行。`session_id`、`tool_name`、`entry`（`rv` か `html`）、
+  `diffLines`、`riskyHits`（当たったパスの**件数**）、`advice`
+
+ログに依頼文・射影・パスは残さない。分析では `session_id` と `transcript_path` でトランスクリプトと突き合わせ、
+「軽いと見立てたのに rv や HTML に進んだセッション」「危ないパスに当たったのに 2 本目が無かった rv」などを数える。
+`jev` と `rules` の両方を残すのは、`Jev: full` の repo で両者を同じ依頼に対して比べるため。
+
 ## 検証方法 (DoD)
 
 - `npm run check` がネットワーク無しで緑（ルール表、射影、フックの入出力）
@@ -138,4 +153,4 @@ jev の応答は `{"answers": {"size": {"score"}, "risky": {"noul"}, "visual": {
 
 - フックの登録は各ハーネスの設定ファイルで行う。Codex は初回に hook の信頼を承認する
 - API 呼び出しのタイムアウトは 3 秒、git 1 回あたり 1.5 秒。フック自体のタイムアウトは 5 秒以上にする（`UserPromptSubmit` はタイムアウトすると出力が捨てられる）
-- ログには見立ての数値だけを残し、依頼文も射影も `kind` も残さない（`~/.local/state/foreman/log.jsonl`）
+- ログには依頼文も射影もパスも残さない（`~/.local/state/foreman/log.jsonl`）。見立ての数値・`kind`・助言の文面は残す（決定 6 の分析に要る）
