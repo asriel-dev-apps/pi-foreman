@@ -2,7 +2,7 @@
 import { execFileSync } from "node:child_process";
 import { readFileSync } from "node:fs";
 import { basename, extname, join } from "node:path";
-import type { Verdict } from "./foreman.ts";
+import { ask, type Verdict } from "./foreman.ts";
 
 export type Mode = "full" | "facts" | "off";
 
@@ -135,4 +135,15 @@ export function rulesVerdict(prompt: string): Verdict {
     kind,
     kindConfidence: 1,
   };
+}
+
+/**
+ * 依頼時の判定 (判定点 1・2)。`Jev: full` だけ jev に全文を問う。既定 (射影) はルール表で決め、何も送らない。
+ * 射影を jev に送っても holdout でルール表に勝たなかったため (2026-09-23 実測、ADR 0003 決定 5)。
+ */
+export async function judge(prompt: string, facts: RepoFacts | null): Promise<Verdict | null> {
+  const mode = modeOf(facts);
+  if (mode === "off") return null;
+  if (mode === "facts") return rulesVerdict(prompt);
+  return ask(buildState(prompt, facts, "full")!);
 }

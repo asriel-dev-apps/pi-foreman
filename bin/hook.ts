@@ -3,9 +3,9 @@
 import { appendFileSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { homedir, tmpdir } from "node:os";
 import { join } from "node:path";
-import { advise, ask, type Verdict } from "../src/foreman.ts";
+import { advise, type Verdict } from "../src/foreman.ts";
 import { adviseAtEntry, diffFacts, entryOf } from "../src/milestone.ts";
-import { buildState, modeOf, repoFacts } from "../src/state.ts";
+import { judge, modeOf, repoFacts } from "../src/state.ts";
 
 type Saved = { verdict?: Verdict };
 
@@ -68,9 +68,7 @@ async function main(): Promise<void> {
     if (!prompt) return;
     const facts = repoFacts(cwd);
     const mode = modeOf(facts);
-    const state = buildState(prompt, facts, mode);
-    if (!state) return;
-    const verdict = await ask(state);
+    const verdict = await judge(prompt, facts);
     if (!verdict) return;
     save(sid, { verdict });
     // 数値だけ。kind も依頼文から導いた情報なので残さない

@@ -1,7 +1,7 @@
 // pi への配線。判断は src/foreman.ts にあり、ここは state を組んで注入するだけ。
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
-import { advise, ask, suggestModel } from "../src/foreman.ts";
-import { buildState, modeOf, repoFacts } from "../src/state.ts";
+import { advise, suggestModel } from "../src/foreman.ts";
+import { judge, repoFacts } from "../src/state.ts";
 
 export default function register(pi: ExtensionAPI): void {
   let outstanding: string[] = [];
@@ -12,11 +12,8 @@ export default function register(pi: ExtensionAPI): void {
     const prompt = event.prompt?.trim();
     if (!prompt) return;
 
-    // 送る範囲は対象リポジトリの `Jev:` 行で決まる。既定は射影だけ (ADR 0003 決定 4)
-    const facts = repoFacts(ctx.cwd);
-    const state = buildState(prompt, facts, modeOf(facts));
-    if (!state) return;
-    const verdict = await ask(state);
+    // 対象リポジトリの `Jev: full` だけ jev に全文を送る。既定は手元のルール表 (ADR 0003 決定 4・5)
+    const verdict = await judge(prompt, repoFacts(ctx.cwd));
     if (!verdict) {
       // fail open: 判定が出なくても仕事は止めない (ADR 0001 決定 5)
       const now = Date.now();
